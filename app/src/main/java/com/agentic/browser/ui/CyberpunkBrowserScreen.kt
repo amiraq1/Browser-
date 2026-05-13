@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.agentic.browser.BrowserAgentUiState
+import com.agentic.browser.UpdateCheckOutcome
 import com.agentic.browser.model.ModelDownloadState
 import com.agentic.browser.model.ModelImportState
 import com.agentic.browser.web.AgentBridge
@@ -74,7 +75,9 @@ fun CyberpunkBrowserScreen(
     onClearRoomMemory: () -> Unit,
     onDeleteModel: () -> Unit,
     onReExtractDom: () -> Unit,
-    onImportLocalModel: (Uri) -> Unit
+    onImportLocalModel: (Uri) -> Unit,
+    onCheckUpdates: () -> Unit,
+    onOpenRelease: (String) -> Unit
 ) {
     val context = LocalContext.current
     val importLauncher = rememberLauncherForActivityResult(
@@ -134,7 +137,10 @@ fun CyberpunkBrowserScreen(
                 onClearRoomMemory = onClearRoomMemory,
                 onDeleteModel = onDeleteModel,
                 onReExtractDom = onReExtractDom,
-                onImportLocalModelLaunch = { importLauncher.launch(arrayOf("application/octet-stream", "*/*")) }
+                onImportLocalModelLaunch = { importLauncher.launch(arrayOf("application/octet-stream", "*/*")) },
+                updateState = uiState.updateState,
+                onCheckUpdates = onCheckUpdates,
+                onOpenRelease = onOpenRelease
             )
         }
     }
@@ -214,7 +220,10 @@ private fun CommandCenterPanel(
     onClearRoomMemory: () -> Unit,
     onDeleteModel: () -> Unit,
     onReExtractDom: () -> Unit,
-    onImportLocalModelLaunch: () -> Unit
+    onImportLocalModelLaunch: () -> Unit,
+    updateState: UpdateCheckOutcome,
+    onCheckUpdates: () -> Unit,
+    onOpenRelease: (String) -> Unit
 ) {
     val panelColors = if (isAwaitingHuman) listOf(WarningRed, WarningAmber) else listOf(NeonCyan, NeonGreen)
     val panelTitleColor = if (isAwaitingHuman) WarningAmber else NeonGreen
@@ -311,7 +320,10 @@ private fun CommandCenterPanel(
                 onClearContext = onClearContext,
                 onClearRoomMemory = onClearRoomMemory,
                 onReExtractDom = onReExtractDom,
-                onDeleteModel = onDeleteModel
+                onDeleteModel = onDeleteModel,
+                updateState = updateState,
+                onCheckUpdates = onCheckUpdates,
+                onOpenRelease = onOpenRelease
             )
 
             Spacer(Modifier.height(4.dp))
@@ -334,7 +346,10 @@ private fun ActionGrid(
     onClearContext: () -> Unit,
     onClearRoomMemory: () -> Unit,
     onReExtractDom: () -> Unit,
-    onDeleteModel: () -> Unit
+    onDeleteModel: () -> Unit,
+    updateState: UpdateCheckOutcome,
+    onCheckUpdates: () -> Unit,
+    onOpenRelease: (String) -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         CyberButton("Go", onGo, enabled = !isBusy, modifier = Modifier.weight(1f))
@@ -354,7 +369,65 @@ private fun ActionGrid(
     }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         CyberButton("Delete Model", onDeleteModel, enabled = !isBusy, modifier = Modifier.weight(1f))
-        Spacer(modifier = Modifier.weight(1f))
+        val isChecking = updateState is UpdateCheckOutcome.Checking
+        CyberButton(
+            text = if (isChecking) "Checking..." else "Check Updates",
+            onClick = onCheckUpdates,
+            enabled = !isChecking,
+            color = NeonCyan,
+            modifier = Modifier.weight(1f)
+        )
+    }
+    UpdateStatusRow(updateState = updateState, onOpenRelease = onOpenRelease)
+}
+
+@Composable
+private fun UpdateStatusRow(
+    updateState: UpdateCheckOutcome,
+    onOpenRelease: (String) -> Unit
+) {
+    when (updateState) {
+        is UpdateCheckOutcome.Idle -> Unit
+        is UpdateCheckOutcome.Checking -> Text(
+            text = "Update: checking GitHub releases",
+            color = NeonCyan,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp
+        )
+        is UpdateCheckOutcome.UpToDate -> Text(
+            text = "Update: up-to-date (${updateState.currentVersion})",
+            color = NeonGreen,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp
+        )
+        is UpdateCheckOutcome.Available -> {
+            Text(
+                text = "Update available: ${updateState.latestVersion}",
+                color = WarningAmber,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp
+            )
+            if (updateState.url.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CyberButton(
+                        text = "Open Release",
+                        onClick = { onOpenRelease(updateState.url) },
+                        color = WarningAmber,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+        is UpdateCheckOutcome.Error -> Text(
+            text = "Update error: ${updateState.message.take(80)}",
+            color = WarningRed,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp
+        )
     }
 }
 

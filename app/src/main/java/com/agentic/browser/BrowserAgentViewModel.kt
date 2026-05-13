@@ -51,7 +51,8 @@ data class BrowserAgentUiState(
     val pausedUserTask: String? = null,
     val contextUsagePercent: Int = 0,
     val currentUrl: String? = null,
-    val modelUrlInput: String = ""
+    val modelUrlInput: String = "",
+    val updateState: UpdateCheckOutcome = UpdateCheckOutcome.Idle
 )
 
 class BrowserAgentViewModel(application: Application) : AndroidViewModel(application) {
@@ -61,6 +62,7 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
     private val memoryRepository = AgentMemoryRepository(AgentMemoryDb.getInstance(application).extractedFactDao())
     private val modelDownloader = ModelDownloader(application)
     private val modelRecoveryManager = ModelRecoveryManager(application)
+    private val updateChecker: UpdateChecker = UpdateChecker()
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _uiState = MutableStateFlow(BrowserAgentUiState())
@@ -331,6 +333,32 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
     fun clearLogs() {
         _uiState.update { it.copy(terminalLines = emptyList()) }
         addLog("Logs cleared")
+    }
+
+    fun checkForUpdates() {
+        if (_uiState.value.updateState is UpdateCheckOutcome.Checking) {
+            addLog("UPDATE checking: already in progress")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(updateState = UpdateCheckOutcome.Checking) }
+            addLog("UPDATE checking: github releases")
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching { updateChecker.check() }.getOrElse {
+                    UpdateCheckOutcome.Error(it.message?.take(180) ?: "unexpected error")
+                }
+            }
+            when (outcome) {
+                is UpdateCheckOutcome.UpToDate ->
+                    addLog("UPDATE up-to-date: ${outcome.currentVersion}")
+                is UpdateCheckOutcome.Available ->
+                    addLog("UPDATE available: ${outcome.latestVersion}")
+                is UpdateCheckOutcome.Error ->
+                    addLog("UPDATE error: ${outcome.message}")
+                else -> Unit
+            }
+            _uiState.update { it.copy(updateState = outcome) }
+        }
     }
 
     fun clearContextMemory() {
