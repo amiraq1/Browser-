@@ -78,11 +78,10 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             modelDownloader.state.collectLatest { state ->
                 _uiState.update { old ->
+                    val nextPath = (state as? ModelDownloadState.Ready)?.modelPath ?: old.modelPath
                     old.copy(
                         modelState = state,
-                        isModelReady = state is ModelDownloadState.Ready,
-                        modelPath = (state as? ModelDownloadState.Ready)?.modelPath ?: old.modelPath,
-                        isFirstRunModelSetup = !(state is ModelDownloadState.Ready) && old.modelPath.isNullOrBlank()
+                        modelPath = nextPath
                     )
                 }
                 when (state) {
@@ -91,7 +90,6 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
                     is ModelDownloadState.Ready -> {
                         addLog("Model ready: ${state.modelPath}")
                         persistModelPath(state.modelPath)
-                        _uiState.update { it.copy(isFirstRunModelSetup = false) }
                         initializeAgentManager(state.modelPath)
                     }
                     is ModelDownloadState.Error -> addLog("Model error: ${state.message}")
@@ -109,7 +107,12 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
                     is ModelImportState.Ready -> {
                         addLog("Model recovered: ${importState.modelPath}")
                         persistModelPath(importState.modelPath)
-                        _uiState.update { it.copy(isFirstRunModelSetup = false) }
+                        _uiState.update {
+                            it.copy(
+                                modelPath = importState.modelPath,
+                                modelState = ModelDownloadState.Ready(importState.modelPath)
+                            )
+                        }
                         initializeAgentManager(importState.modelPath)
                     }
                     is ModelImportState.Error -> addLog("Import failed: ${importState.message}")
@@ -608,17 +611,16 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update {
             it.copy(
                 modelState = ModelDownloadState.Ready(modelPath),
-                isModelReady = true,
                 modelPath = modelPath,
                 isFirstRunModelSetup = false
             )
         }
-        addLog("Model ready: $modelPath")
+        addLog("MODEL restored from persisted path: $modelPath")
         initializeAgentManager(modelPath)
     }
 
     private fun initializeAgentManager(modelPath: String) {
-        if (loadedModelPath == modelPath && agentManager != null) return
+        if (loadedModelPath == modelPath && agentManager != null && _uiState.value.isModelReady) return
         loadedModelPath = modelPath
         contextManager.clearHistory()
         latestMemoryContext = null
@@ -632,13 +634,27 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
                 addLog("Metric model_init_ms=$initMs")
                 addLog("Agent initialized")
                 addLog("Agent ready")
+                _uiState.update { state ->
+                    state.copy(
+                        modelPath = modelPath,
+                        modelState = ModelDownloadState.Ready(modelPath),
+                        isModelReady = true,
+                        isFirstRunModelSetup = false,
+                        isAgentBusy = false
+                    )
+                }
+                addLog("MODEL ready state set true")
             }.onFailure { error ->
-                addLog("LiteRT-LM initialization failed: ${error.message}")
+                runCatching { agentManager?.close() }
+                agentManager = null
+                loadedModelPath = null
+                addLog("MODEL init failed: ${error.message ?: "unknown"}")
                 _uiState.update { state ->
                     state.copy(
                         isModelReady = false,
                         modelState = ModelDownloadState.Error("Agent init failed: ${error.message}"),
-                        isFirstRunModelSetup = true
+                        isFirstRunModelSetup = true,
+                        isAgentBusy = false
                     )
                 }
             }
@@ -654,7 +670,11 @@ class BrowserAgentViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun persistModelPath(path: String) {
+        val previous = prefs.getString(KEY_MODEL_PATH, null)
         prefs.edit().putString(KEY_MODEL_PATH, path).apply()
+        if (previous != path) {
+            addLog("MODEL path persisted: $path")
+        }
     }
 
     private fun clearPersistedModelPath() {
